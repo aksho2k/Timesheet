@@ -20,11 +20,11 @@ PROJECT="Timesheet.xcodeproj"
 CONFIGURATION="Release"
 ARCHIVE_PATH="build/Timesheet.xcarchive"
 EXPORT_PATH="build/export"
-ZIP_OUTPUT="Timesheet.zip"
+DMG_OUTPUT="Timesheet.dmg"
 EXPORT_PLIST="ExportOptions.plist"
 
 # ── Clean previous build artefacts ────────────────────────────────────────────
-rm -rf build "$ZIP_OUTPUT"
+rm -rf build "$DMG_OUTPUT"
 mkdir -p build
 
 # ── Archive ───────────────────────────────────────────────────────────────────
@@ -36,7 +36,12 @@ xcodebuild archive \
   -destination "generic/platform=macOS" \
   -archivePath "$ARCHIVE_PATH" \
   ONLY_ACTIVE_ARCH=NO \
-  | grep -E "^(error:|warning:|archive:|Build succeeded|** BUILD)" || true
+  2>&1 | grep -E "^(error:|warning:|archive:|\*\* BUILD)" || true
+
+if [[ ! -d "$ARCHIVE_PATH" ]]; then
+  echo "✗ Archive not found at $ARCHIVE_PATH — check errors above."
+  exit 1
+fi
 
 # ── Export ────────────────────────────────────────────────────────────────────
 echo "▸ Exporting signed .app…"
@@ -44,7 +49,7 @@ xcodebuild -exportArchive \
   -archivePath "$ARCHIVE_PATH" \
   -exportPath "$EXPORT_PATH" \
   -exportOptionsPlist "$EXPORT_PLIST" \
-  | grep -E "^(error:|warning:|Export succeeded|** BUILD)" || true
+  2>&1 | grep -E "^(error:|warning:|Export succeeded|\*\* BUILD)" || true
 
 APP="$EXPORT_PATH/Timesheet.app"
 if [[ ! -d "$APP" ]]; then
@@ -52,15 +57,30 @@ if [[ ! -d "$APP" ]]; then
   exit 1
 fi
 
-# ── Zip (ditto preserves code signature and resource forks) ───────────────────
-echo "▸ Zipping…"
-ditto -c -k --keepParent "$APP" "$ZIP_OUTPUT"
+# ── DMG (drag-to-Applications) ────────────────────────────────────────────────
+echo "▸ Building DMG…"
+STAGING="build/dmg_staging"
+rm -rf "$STAGING"
+mkdir -p "$STAGING"
+
+# Copy the signed .app and add an Applications symlink for drag-install
+cp -R "$APP" "$STAGING/Timesheet.app"
+ln -s /Applications "$STAGING/Applications"
+
+# Create a compressed, internet-ready DMG
+hdiutil create \
+  -volname "Timesheet" \
+  -srcfolder "$STAGING" \
+  -ov \
+  -format UDZO \
+  -imagekey zlib-level=9 \
+  "$DMG_OUTPUT"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
-SIZE=$(du -sh "$ZIP_OUTPUT" | cut -f1)
+SIZE=$(du -sh "$DMG_OUTPUT" | cut -f1)
 echo ""
-echo "✓ Done: $ZIP_OUTPUT ($SIZE)"
+echo "✓ Done: $DMG_OUTPUT ($SIZE)"
 echo ""
 echo "Next steps:"
-echo "  1. Notarize (recommended): xcrun notarytool submit $ZIP_OUTPUT --keychain-profile <profile> --wait"
-echo "  2. Create a GitHub release and upload $ZIP_OUTPUT as the release asset."
+echo "  1. Notarize (recommended): xcrun notarytool submit $DMG_OUTPUT --keychain-profile <profile> --wait"
+echo "  2. Create a GitHub release and upload $DMG_OUTPUT as the release asset."
