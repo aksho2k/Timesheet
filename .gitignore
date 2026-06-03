@@ -1,0 +1,37 @@
+# ── Xcode ──────────────────────────────────────────────────────────────────────
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.moved-aside
+*.xcscmblueprint
+DerivedData/
+*.hmap
+*.ipa
+
+# ── Build output ────────────────────────────────────────────────────────────────
+build/
+*.zip
+*.xcarchive
+
+# ── Swift Package Manager ───────────────────────────────────────────────────────
+# Package.resolved is intentionally committed to lock dependency versions.
+.build/
+.swiftpm/configuration/
+
+# ── macOS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Thumbs.db
+
+# ── Credentials / secrets ───────────────────────────────────────────────────────
+*.p12
+*.mobileprovision
+*.provisionprofile
+.env
+
+# ── Editor artifacts ────────────────────────────────────────────────────────────
+*.swp
+*.swo
+*~
