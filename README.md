@@ -20,8 +20,8 @@ A lightweight macOS menu bar app for tracking time and saving entries directly t
 ## Installation
 
 1. Go to the [**Releases**](../../releases/latest) page
-2. Download **Timesheet.zip**
-3. Unzip it and drag **Timesheet.app** to `/Applications`
+2. Download **Timesheet.dmg**
+3. Open the DMG and drag **Timesheet.app** to the Applications folder
 4. Launch the app — the ⏱ icon appears in the menu bar
 
 > **First launch note:** macOS may show a Gatekeeper warning because the app is distributed outside the App Store. To open it: right-click (or Control-click) the app → **Open** → **Open** in the dialog.

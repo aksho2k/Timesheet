@@ -2,11 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- "developer-id" distributes outside the App Store.
-	     Requires a Developer ID Application certificate in your keychain.
-	     Run: security find-identity -v -p codesigning  to list available certs. -->
+	<!-- "development" uses your Apple Development certificate (available now).
+	     Switch to "developer-id" once you have a Developer ID Application cert
+	     for fully notarized distribution. -->
 	<key>method</key>
-	<string>developer-id</string>
+	<string>development</string>
 	<key>teamID</key>
 	<string>RZ74GR5U35</string>
 	<key>signingStyle</key>
