@@ -5,6 +5,10 @@ import AppKit
 class GoogleCalendarManager {
     private let baseURL = "https://www.googleapis.com/calendar/v3"
 
+    /// Cached Timesheet calendar ID so both save and fetch flows resolve it once
+    /// and always use the same value.
+    private var cachedTimesheetCalendarID: String?
+
     func saveEvent(title: String, start: Date, end: Date, type: EntryType) async -> String {
         guard let clientID = Bundle.main.object(forInfoDictionaryKey: "GIDClientID") as? String,
               !clientID.hasPrefix("YOUR_") else {
@@ -14,7 +18,7 @@ class GoogleCalendarManager {
             let user = try await ensureAuthenticated()
             try await user.refreshTokensIfNeeded()
             let token = user.accessToken.tokenString
-            let calendarID = try await findTimesheetCalendar(token: token)
+            let calendarID = try await resolveTimesheetCalendar(token: token)
             try await postEvent(title: title, start: start, end: end, type: type, to: calendarID, token: token)
             return "Saved to Google Calendar (Timesheet)."
         } catch GoogleCalendarError.noTimesheetCalendar {
@@ -78,7 +82,11 @@ class GoogleCalendarManager {
 
     // MARK: - Calendar API
 
-    private func findTimesheetCalendar(token: String) async throws -> String {
+    /// Returns the Timesheet calendar ID, using a cached value after the first lookup.
+    private func resolveTimesheetCalendar(token: String) async throws -> String {
+        if let cached = cachedTimesheetCalendarID {
+            return cached
+        }
         var req = URLRequest(url: URL(string: "\(baseURL)/users/me/calendarList")!)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         let (data, _) = try await URLSession.shared.data(for: req)
@@ -86,6 +94,10 @@ class GoogleCalendarManager {
         guard let cal = list.items.first(where: { $0.summary == "Timesheet" }) else {
             throw GoogleCalendarError.noTimesheetCalendar
         }
+        cachedTimesheetCalendarID = cal.id
+        #if DEBUG
+        print("[Timesheet] Resolved Timesheet calendar ID: \(cal.id)")
+        #endif
         return cal.id
     }
 
@@ -125,6 +137,97 @@ class GoogleCalendarManager {
             throw GoogleCalendarError.apiError
         }
     }
+
+    // MARK: - Recent event titles
+
+    /// Returns the titles of the last `count` past events in the Timesheet calendar,
+    /// most recent first. Silently returns an empty array on any error.
+    func fetchRecentTitles(count: Int = 3) async -> [CalendarSuggestion] {
+        guard let clientID = Bundle.main.object(forInfoDictionaryKey: "GIDClientID") as? String,
+              !clientID.hasPrefix("YOUR_") else { return [] }
+        do {
+            let user = try await ensureAuthenticated()
+            try await user.refreshTokensIfNeeded()
+            let token = user.accessToken.tokenString
+            return try await fetchEventTitles(token: token, unique: count)
+        } catch {
+            #if DEBUG
+            print("[Timesheet] fetchRecentTitles error: \(error)")
+            #endif
+            return []
+        }
+    }
+
+    private func fetchEventTitles(token: String, unique: Int) async throws -> [CalendarSuggestion] {
+        let calendarID = "c_573eb76400332bf720232e4715c7821e539b7fc3c4721e0b86e8096ab61b98bf@group.calendar.google.com"
+        let encodedID = calendarID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? calendarID
+
+        // Format dates with IST offset (+05:30) so morning IST events are not excluded.
+        let ist = TimeZone(secondsFromGMT: 5 * 3600 + 30 * 60)!
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd'T'HH:mm:ssxxx"
+        fmt.timeZone = ist
+        let now = Date()
+        let sevenDaysAgo = Calendar.current.date(byAdding: .day, value: -7, to: now)!
+        // timeMin = midnight IST on the day 7 days ago
+        var comps = Calendar.current.dateComponents(in: ist, from: sevenDaysAgo)
+        comps.hour = 0; comps.minute = 0; comps.second = 0
+        let timeMinDate = Calendar.current.date(from: comps) ?? sevenDaysAgo
+        let timeMin = fmt.string(from: timeMinDate)
+        let timeMax = fmt.string(from: now)
+
+        // URLComponents.queryItems leaves '+' unencoded (RFC 3986 allows it in queries),
+        // but Google Calendar API treats bare '+' as a space, making "+05:30" invalid.
+        // Pre-encode '+' to '%2B' and set via percentEncodedQuery to avoid double-encoding.
+        let timeMinEncoded = timeMin.replacingOccurrences(of: "+", with: "%2B")
+        let timeMaxEncoded = timeMax.replacingOccurrences(of: "+", with: "%2B")
+
+        var components = URLComponents(string: "\(baseURL)/calendars/\(encodedID)/events")!
+        components.queryItems = [
+            URLQueryItem(name: "orderBy",      value: "startTime"),
+            URLQueryItem(name: "singleEvents", value: "true"),
+            URLQueryItem(name: "maxResults",   value: "50"),
+        ]
+        components.percentEncodedQuery = (components.percentEncodedQuery ?? "")
+            + "&timeMin=\(timeMinEncoded)"
+            + "&timeMax=\(timeMaxEncoded)"
+        var req = URLRequest(url: components.url!)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        #if DEBUG
+        print("[Timesheet] fetchEventTitles URL: \(components.url?.absoluteString ?? "nil")")
+        #endif
+
+        let (data, _) = try await URLSession.shared.data(for: req)
+        let response: EventListResponse
+        do {
+            response = try JSONDecoder().decode(EventListResponse.self, from: data)
+        } catch {
+            #if DEBUG
+            print("[Timesheet] fetchEventTitles decode error: \(error)")
+            print("[Timesheet] raw response: \(String(data: data, encoding: .utf8) ?? "nil")")
+            #endif
+            throw error
+        }
+
+        #if DEBUG
+        let rawTitles = response.items.compactMap { $0.summary }
+        print("[Timesheet] fetchEventTitles: \(rawTitles.count) raw events before dedup: \(rawTitles)")
+        #endif
+
+        // Reverse (API returns oldest-first) then deduplicate, keeping most recent occurrence.
+        var seen = Set<String>()
+        var result: [CalendarSuggestion] = []
+        for item in response.items.reversed() {
+            guard let title = item.summary else { continue }
+            let key = title.lowercased()
+            guard seen.insert(key).inserted else { continue }
+            let entryType: EntryType = item.colorId == "5" ? .meeting : .task
+            result.append(CalendarSuggestion(title: title, entryType: entryType))
+            if result.count == unique { break }
+        }
+        return result
+    }
 }
 
 // MARK: - Models
@@ -136,6 +239,20 @@ private struct CalendarListResponse: Decodable {
 private struct CalendarItem: Decodable {
     let id: String
     let summary: String
+}
+
+private struct EventListResponse: Decodable {
+    let items: [EventItem]
+}
+
+private struct EventItem: Decodable {
+    let summary: String?
+    let colorId: String?
+}
+
+struct CalendarSuggestion {
+    let title: String
+    let entryType: EntryType
 }
 
 // MARK: - Errors

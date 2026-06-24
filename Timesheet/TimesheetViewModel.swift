@@ -20,6 +20,8 @@ class TimesheetViewModel: ObservableObject {
     @Published var elapsedSeconds: Int = 0
     @Published var saveMessage: String? = nil
     @Published var statusBarTitle: String? = nil
+    @Published var suggestions: [CalendarSuggestion] = []
+    @Published var isFetchingSuggestions: Bool = false
 
     private var recordingTimer: Timer?
     let calendarManager = GoogleCalendarManager()
@@ -45,8 +47,21 @@ class TimesheetViewModel: ObservableObject {
         return "\(totalMinutes)m"
     }
 
+    // MARK: - Time rounding
+
+    /// Rounds a date to the nearest minute.
+    /// Seconds < 30 → floor to :00; seconds ≥ 30 → ceil to next :00.
+    private func roundedToNearestMinute(_ date: Date) -> Date {
+        let cal = Calendar.current
+        let seconds = cal.component(.second, from: date)
+        var comps = cal.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+        comps.second = 0
+        let base = cal.date(from: comps) ?? date
+        return seconds >= 30 ? base.addingTimeInterval(60) : base
+    }
+
     func startRecording() {
-        startTime = Date()
+        startTime = roundedToNearestMinute(Date())
         elapsedSeconds = 0
         state = .recording
         statusBarTitle = "⏱ 00:00"
@@ -67,7 +82,7 @@ class TimesheetViewModel: ObservableObject {
     func stopRecording() {
         recordingTimer?.invalidate()
         recordingTimer = nil
-        endTime = Date()
+        endTime = roundedToNearestMinute(Date())
         statusBarTitle = nil
         state = .summary
     }
@@ -81,6 +96,18 @@ class TimesheetViewModel: ObservableObject {
         elapsedSeconds = 0
         saveMessage = nil
         statusBarTitle = nil
+        Task { await fetchSuggestions() }
+    }
+
+    func fetchSuggestions() async {
+        guard !isFetchingSuggestions else { return }
+        isFetchingSuggestions = true
+        let titles = await calendarManager.fetchRecentTitles(count: 5)
+        // Only replace if we got results, so stale suggestions stay on failure.
+        if !titles.isEmpty {
+            suggestions = titles
+        }
+        isFetchingSuggestions = false
     }
 
     func saveToCalendar() async {
